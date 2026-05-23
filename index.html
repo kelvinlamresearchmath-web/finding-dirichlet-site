@@ -315,6 +315,7 @@
                     textLayerDiv.innerHTML = '';
                     textLayerDiv.style.width = `${viewport.width}px`;
                     textLayerDiv.style.height = `${viewport.height}px`;
+                    textLayerDiv.style.setProperty('--scale-factor', mainScale);  // ← 新增
 
                     const textContent = await page.getTextContent();
                     await pdfjsLib.renderTextLayer({
