@@ -485,10 +485,17 @@ function scrollThumbnailToCenter(pageIdx) {
 
     // 数学公式直接定位，不依赖 DOM 布局，连点也不飘
     // p-8 = 32px 上边距，space-y-8 = 32px 页间距
-    if (cachedFirstPageSize) {
-        const pageH = cachedFirstPageSize.height * mainScale;
-        mainViewerContainer.scrollTop = 32 + (savedPage - 1) * (pageH + 32);
+    // 换成这段（读取真实 DOM 位置，不依赖任何假设值）
+const targetBlock = document.getElementById(`main-page-block-${savedPage}`);
+if (targetBlock) {
+    let offset = 0;
+    let el = targetBlock;
+    while (el && el !== mainViewerContainer) {
+        offset += el.offsetTop;
+        el = el.offsetParent;
     }
+    mainViewerContainer.scrollTop = offset;
+}
 
     clearTimeout(zoomDebounceTimer);
     zoomDebounceTimer = setTimeout(() => {
