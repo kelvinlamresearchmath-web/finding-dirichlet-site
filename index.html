@@ -455,6 +455,12 @@ function scrollThumbnailToCenter(pageIdx) {
     mainScale = Math.max(0.6, Math.min(2.5, newScale));
     zoomPercent.innerText = `${Math.round(mainScale * 100)}%`;
 
+    // 立即锁定，防止任何滚动事件干扰
+    isListenScroll = false;
+    isZooming = true;
+    zoomLockGeneration++;
+    const myGeneration = zoomLockGeneration;
+
     // 取消所有进行中的渲染
     for (let key in pageRenderingStates) {
         const state = pageRenderingStates[key];
@@ -478,29 +484,29 @@ function scrollThumbnailToCenter(pageIdx) {
         }
     }
 
-    // 锁定滚动与渲染
-    isListenScroll = false;
-    isZooming = true;
-    zoomLockGeneration++;
-    const myGeneration = zoomLockGeneration;
-
-    // 数学公式直接定位，不依赖 DOM 布局，连点也不飘
-    // p-8 = 32px 上边距，space-y-8 = 32px 页间距
-    if (cachedFirstPageSize) {
-        const pageH = cachedFirstPageSize.height * mainScale;
-        mainViewerContainer.scrollTop = 32 + (savedPage - 1) * (pageH + 32);
-    }
-
-    clearTimeout(zoomDebounceTimer);
-    zoomDebounceTimer = setTimeout(() => {
-        if (zoomLockGeneration === myGeneration) {
-            isZooming = false;
-            isListenScroll = true;
-            updateViewportRendering();
+    // 等浏览器提交布局后，再用真实 offsetTop 定位，彻底消除跳动
+    requestAnimationFrame(() => {
+        const targetBlock = document.getElementById(`main-page-block-${savedPage}`);
+        if (targetBlock) {
+            let offset = 0;
+            let el = targetBlock;
+            while (el && el !== mainViewerContainer) {
+                offset += el.offsetTop;
+                el = el.offsetParent;
+            }
+            mainViewerContainer.scrollTop = offset;
         }
-    }, 250);
-}
 
+        clearTimeout(zoomDebounceTimer);
+        zoomDebounceTimer = setTimeout(() => {
+            if (zoomLockGeneration === myGeneration) {
+                isZooming = false;
+                isListenScroll = true;
+                updateViewportRendering();
+            }
+        }, 250);
+    });
+}
         btnZoomIn.addEventListener('click', () => updateZoom(mainScale + 0.15));
         btnZoomOut.addEventListener('click', () => updateZoom(mainScale - 0.15));
     </script>
