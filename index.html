@@ -2,8 +2,8 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <meta name="robots" content="noindex,nofollow">
-    <title>乐谱多媒体阅读器 (自适应文本层精密焊接·极致丝滑版)</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>多媒体阅读器</title>
     <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
     <script src="https://lib.baomitu.com/pdf.js/3.11.174/pdf.min.js"></script>
@@ -40,6 +40,12 @@
             background: rgba(239, 68, 68, 0.25) !important;
             border: 2px solid rgba(239, 68, 68, 0.9) !important;
         }
+        /* 缩略栏自定义细滚动条 ← 加在这里 */
+    #thumbnail-container::-webkit-scrollbar { width: 5px; }
+    #thumbnail-container::-webkit-scrollbar-track { background: transparent; }
+    #thumbnail-container::-webkit-scrollbar-thumb { background: #D1D5DB; border-radius: 999px; }
+    #thumbnail-container::-webkit-scrollbar-thumb:hover { background: #9CA3AF; }
+    #thumbnail-container { scrollbar-width: thin; scrollbar-color: #D1D5DB transparent; }
     </style>
 </head>
 <body class="bg-[#F8F9FA] text-[#1A1A1A] font-sans h-screen flex flex-col overflow-hidden">
@@ -56,7 +62,7 @@
         </div>
         <label class="flex items-center space-x-2 bg-[#1A1A1A] hover:bg-[#333333] text-white px-4 py-2 rounded-full text-sm font-medium transition-all cursor-pointer shadow-sm">
             <i data-lucide="upload-cloud" class="w-4 h-4"></i>
-            <span>导入 PDF 乐谱</span>
+            <span>导入 PDF </span>
             <input type="file" id="file-input" accept=".pdf" class="hidden">
         </label>
     </header>
@@ -67,7 +73,7 @@
                 <span class="text-xs font-bold uppercase tracking-wider text-gray-400">乐谱缩略</span>
                 <span class="text-xs bg-gray-100 px-2 py-1 rounded-md text-gray-500" id="page-count">0 页</span>
             </div>
-            <div id="thumbnail-container" class="flex-1 overflow-y-auto p-4 space-y-4 no-scrollbar">
+            <div id="thumbnail-container" class="flex-1 overflow-y-auto p-4 space-y-4">
                 <div class="text-center text-sm text-gray-400 mt-8">暂无文件</div>
             </div>
         </aside>
@@ -97,6 +103,15 @@
 
         const fileInput = document.getElementById('file-input');
         const thumbnailContainer = document.getElementById('thumbnail-container');
+        // ↓ 新增内容放这里
+        thumbnailContainer.addEventListener('scroll', () => {
+            isUserScrollingThumbnails = true;
+            clearTimeout(thumbnailScrollTimer);
+            thumbnailScrollTimer = setTimeout(() => {
+                isUserScrollingThumbnails = false;
+            }, 1000);
+        });
+        // ↑ 新增结束
         const pdfContainerList = document.getElementById('pdf-container-list');
         const pageIndicator = document.getElementById('audio-page-indicator');
         const audioPlayer = document.getElementById('audio-player');
@@ -104,6 +119,12 @@
         const mainViewerContainer = document.getElementById('main-viewer-container');
 
         let isListenScroll = true;
+        let cachedFirstPageSize = null;   // 新增
+        let zoomDebounceTimer = null;     // 新增
+        let zoomLockGeneration = 0;   // ← 新增
+        let isZooming = false;   // ← 新增
+        let isUserScrollingThumbnails = false;  // 新增
+        let thumbnailScrollTimer = null;         // 新增
 
         // 🎯 核心控制中心：管理每页的独立渲染状态与中断指针
         let pageRenderingStates = {}; 
@@ -112,7 +133,7 @@
         const TARGET_UNICODE_CHAR = "▶"; 
 
         const independentPlaylist = [
-            'Allegro.wav', 'Adagio.wav', 'Rondo.wav', 'Motive-A.wav', 'Motive-B.wav', 'Motive-C.wav'   
+            'Allegro.wav', 'Adagio.wav', 'Rondo.wav', 'Motive-A.wav', 'Motive-B.wav', 'Motive-C.wav', 'weber1-1.wav'   
         ];
 
         fileInput.addEventListener('change', (e) => {
@@ -159,6 +180,8 @@
             thumbnailContainer.innerHTML = '';
             
             const firstPage = await pdfDoc.getPage(1);
+            const baseViewport = firstPage.getViewport({ scale: 1.0 });          // 新增
+            cachedFirstPageSize = { width: baseViewport.width, height: baseViewport.height }; // 新增
             const viewport = firstPage.getViewport({ scale: mainScale });
             const widthStr = `${viewport.width}px`;
             const heightStr = `${viewport.height}px`;
@@ -192,11 +215,16 @@
                 thumbnailContainer.appendChild(thumbWrapper);
 
                 thumbWrapper.addEventListener('click', () => {
-                    isListenScroll = false;
-                    pageWrapper.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                    switchPageUI(i);
-                    setTimeout(() => { isListenScroll = true; updateViewportRendering(); }, 500);
-                });
+    isListenScroll = false;
+    isUserScrollingThumbnails = true;          // ← 新增：阻止 switchPageUI 反向滚动缩略图
+    pageWrapper.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    switchPageUI(i);
+    setTimeout(() => {
+        isListenScroll = true;
+        isUserScrollingThumbnails = false;     // ← 新增：主视图滚动完成后才解除锁定
+        updateViewportRendering();
+    }, 1400);
+});
             }
 
             // 缩略图串行隔离通道，画完一页走下一页，彻底消灭封面串流Bug
@@ -241,15 +269,6 @@
                     if (pageRenderingStates[i].renderedScale !== mainScale) {
                         renderSinglePageLayer(i);
                     }
-                } else {
-                    // 如果页面不在视野内，在放大的时候我们只更新框架尺寸，不给 CPU 增加任何图画负担！
-                    pdfDoc.getPage(i).then(page => {
-                        const viewport = page.getViewport({ scale: mainScale });
-                        if (block.style.width !== `${viewport.width}px`) {
-                            block.style.width = `${viewport.width}px`;
-                            block.style.height = `${viewport.height}px`;
-                        }
-                    });
                 }
             }
         }
@@ -369,7 +388,7 @@
         mainViewerContainer.addEventListener('scroll', () => {
             if (!scrollTick) {
                 window.requestAnimationFrame(() => {
-                    updateViewportRendering(); // 核心：滚到哪页，哪页才会重绘
+                    if (!isZooming) updateViewportRendering(); // ← 加守卫
                     
                     if (!isListenScroll) { scrollTick = false; return; }
                     const blocks = document.querySelectorAll('.pdf-page-block');
@@ -389,6 +408,25 @@
             }
         });
 
+        // 缩略图双向精准居中
+function scrollThumbnailToCenter(pageIdx) {
+    const thumb = document.getElementById(`thumb-${pageIdx}`);
+    if (!thumb) return;
+    const container = thumbnailContainer;
+    const thumbTop    = thumb.offsetTop;
+    const thumbH      = thumb.offsetHeight;
+    const containerH  = container.clientHeight;
+    const scrollTop   = container.scrollTop;
+
+    const isAbove = thumbTop < scrollTop;
+    const isBelow = (thumbTop + thumbH) > (scrollTop + containerH);
+
+    if (isAbove || isBelow) {
+        const target = thumbTop - (containerH / 2) + (thumbH / 2);
+        container.scrollTo({ top: Math.max(0, target), behavior: 'smooth' });
+    }
+}
+
         function switchPageUI(pageIdx) {
             currentPageNum = pageIdx;
             pageIndicator.innerText = `第 ${pageIdx} 页`;
@@ -398,8 +436,11 @@
             });
             const activeThumb = document.getElementById(`thumb-${pageIdx}`);
             if (activeThumb) {
-                activeThumb.classList.add('border-[#1A1A1A]', 'bg-gray-50', 'ring-1', 'ring-[#1A1A1A]');
+            activeThumb.classList.add('border-[#1A1A1A]', 'bg-gray-50', 'ring-1', 'ring-[#1A1A1A]');
+            if (!isUserScrollingThumbnails) {
+                scrollThumbnailToCenter(pageIdx);
             }
+        }
         }
 
         // 🔓 瞬间提速十倍的终极动态放缩控制
@@ -408,13 +449,56 @@
         const zoomPercent = document.getElementById('zoom-percent');
 
         function updateZoom(newScale) {
-            if (!pdfDoc) return;
-            mainScale = Math.max(0.6, Math.min(2.5, newScale));
-            zoomPercent.innerText = `${Math.round(mainScale * 100)}%`;
-            
-            // 核心：点击放大时不再使用老旧的 for 循环卡死渲染，直接调度高级视口过滤器，瞬间只刷视口内可见页！
-            updateViewportRendering(); 
+    if (!pdfDoc) return;
+    const savedPage = currentPageNum;
+    mainScale = Math.max(0.6, Math.min(2.5, newScale));
+    zoomPercent.innerText = `${Math.round(mainScale * 100)}%`;
+
+    // 取消所有进行中的渲染
+    for (let key in pageRenderingStates) {
+        const state = pageRenderingStates[key];
+        if (state.currentRenderTask) {
+            state.currentRenderTask.cancel();
+            state.currentRenderTask = null;
         }
+        state.renderedScale = 0;
+    }
+
+    // 同步更新所有页面尺寸
+    if (cachedFirstPageSize) {
+        const newW = cachedFirstPageSize.width * mainScale;
+        const newH = cachedFirstPageSize.height * mainScale;
+        for (let i = 1; i <= pdfDoc.numPages; i++) {
+            const block = document.getElementById(`main-page-block-${i}`);
+            if (block) {
+                block.style.width = `${newW}px`;
+                block.style.height = `${newH}px`;
+            }
+        }
+    }
+
+    // 锁定滚动与渲染
+    isListenScroll = false;
+    isZooming = true;
+    zoomLockGeneration++;
+    const myGeneration = zoomLockGeneration;
+
+    // 数学公式直接定位，不依赖 DOM 布局，连点也不飘
+    // p-8 = 32px 上边距，space-y-8 = 32px 页间距
+    if (cachedFirstPageSize) {
+        const pageH = cachedFirstPageSize.height * mainScale;
+        mainViewerContainer.scrollTop = 32 + (savedPage - 1) * (pageH + 32);
+    }
+
+    clearTimeout(zoomDebounceTimer);
+    zoomDebounceTimer = setTimeout(() => {
+        if (zoomLockGeneration === myGeneration) {
+            isZooming = false;
+            isListenScroll = true;
+            updateViewportRendering();
+        }
+    }, 250);
+}
 
         btnZoomIn.addEventListener('click', () => updateZoom(mainScale + 0.15));
         btnZoomOut.addEventListener('click', () => updateZoom(mainScale - 0.15));
